@@ -8,17 +8,22 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"testing"
 )
 
-var gladosInfo = map[string]any{
-	"usr@usr.com":    "cookie",
-}
+const (
+	gladosUrl      = "https://glados.rocks/api/user/checkin"
+	pushToken      = "xxx_push_token"
+	v2freeLoginUrl = "https://v2free.org/auth/login"
+	v2freeCheckUrl = "https://v2free.org/user/checkin"
+)
 
-var v2freeInfo = map[string]any{
-	"user@user.com":         "password",
+type Account struct {
+	ID       string
+	Cookie   string
+	Password string
+	Req      Request
 }
-
-var pushToken = "XXX"
 
 type Result struct {
 	Code    int    `json:"code"`
@@ -27,148 +32,198 @@ type Result struct {
 	Msg     string `json:"msg"`
 }
 
-func MapToJson(param map[string]any) string {
+var gladosAccounts = []Account{
+	{
+		ID:     "xxx@qq.com",
+		Cookie: "xxx_cookie",
+		Req: Request{
+			URL:     gladosUrl,
+			Method:  http.MethodPost,
+			Payload: strings.NewReader(`{"token":"glados.network"}`),
+			Headers: map[string]string{"content-type": "application/json;charset=UTF-8"},
+		},
+	},
+}
+
+var v2freeAccounts = []Account{
+	{
+		ID:       "xx@qq.com",
+		Password: "pwd",
+		Req: Request{
+			URL:    v2freeLoginUrl,
+			Method: http.MethodPost,
+			Headers: map[string]string{
+				"content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+				"referer":      "https://v2free.org/auth/login",
+			},
+		},
+	},
+}
+
+func (acc *Account) getCookie(cookies []string) string {
+	var sb strings.Builder
+	for _, v := range cookies {
+		parts := strings.Split(v, ";")
+		uid := strings.TrimSpace(parts[0])
+		sb.WriteString(uid)
+		sb.WriteString("; ")
+	}
+
+	str := sb.String()
+	str = strings.TrimRight(str, "; ")
+
+	return str
+}
+
+type HTTPRequester interface {
+	SendRequest() (*http.Response, error)
+	GetResponseBody(res *http.Response) ([]byte, error)
+	GetResponseFunc() (*http.Response, []byte, error)
+}
+
+var _ HTTPRequester // 确保实现了 HTTPRequester接口
+
+type Request struct {
+	URL     string
+	Method  string
+	Payload io.Reader
+	Headers map[string]string
+}
+
+func MapToJson(param map[string]string) string {
 	dataType, _ := json.Marshal(param)
 	dataString := string(dataType)
 	return dataString
 }
 
-func sendHTTPRequest(url, method string, headers map[string]string, body io.Reader) (*http.Response, error) {
+func (req *Request) SendRequest() (*http.Response, error) {
 	client := &http.Client{}
-	req, err := http.NewRequest(method, url, body)
+
+	httpReq, err := http.NewRequest(req.Method, req.URL, req.Payload)
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
+
+	for key, value := range req.Headers {
+		httpReq.Header.Add(key, value)
 	}
-	res, err := client.Do(req)
+
+	res, err := client.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
+
 	return res, nil
 }
 
-func getResponseBody(url, method string, headers map[string]string, body io.Reader) ([]byte, error) {
-	res, err := sendHTTPRequest(url, method, headers, body)
-	if err != nil {
-		return nil, err
-	}
+func (req *Request) GetResponseBody(res *http.Response) ([]byte, error) {
+	body, err := io.ReadAll(res.Body)
 	defer res.Body.Close()
 
-	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	if res.StatusCode >= 400 {
-		return nil, fmt.Errorf("Request failed with status code: %v. Response body: %v", res.StatusCode, string(resBody))
-	}
-
-	return resBody, nil
+	return body, nil
 }
 
-func main() {
-	push := make(map[string]any, len(gladosInfo)+len(v2freeInfo))
+func (req *Request) GetAccountResponseFunc(acc *Account) (*http.Response, []byte, error) {
+	req.Headers["cookie"] = acc.Cookie // 装饰器模式，对 GetResponseFunc 进行装饰增加设置cookie的设置以重用HTTPRequest接口
 
-	var wg sync.WaitGroup
-	for id, cookie := range gladosInfo {
+	return req.GetResponseFunc()
+}
+
+func (req *Request) GetResponseFunc() (*http.Response, []byte, error) {
+	res, err := req.SendRequest()
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	body, err := req.GetResponseBody(res)
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return res, body, nil
+}
+
+type pushMap map[string]string
+
+func (push pushMap) CheckinGla() {
+	wg := sync.WaitGroup{}
+
+	for _, account := range gladosAccounts {
 		wg.Add(1)
-		go func(id string, cookie any) {
-			defer wg.Done()
+		_, body, err := account.Req.GetAccountResponseFunc(&account)
+		if err != nil {
+			push[account.ID] = err.Error()
+			continue
+		}
 
-			url := "https://glados.rocks/api/user/checkin"
-			method := http.MethodPost
-			headers := map[string]string{
-				"Content-Type": "application/json;charset=UTF-8",
-				"Cookie":       cookie.(string),
-			}
-			body := strings.NewReader(`{"token":"glados.network"}`)
-
-			resBody, err := getResponseBody(url, method, headers, body)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-			result := Result{}
-			json.Unmarshal(resBody, &result)
-			push[id] = result.Message
-			fmt.Println(id, ": ", result.Message)
-		}(id, cookie)
+		result := Result{}
+		_ = json.Unmarshal(body, &result)
+		fmt.Println(account.ID, ":", result.Message)
+		push[account.ID] = result.Message
+		wg.Done()
 	}
 	wg.Wait()
+}
 
-	for id, pw := range v2freeInfo {
+func (push pushMap) CheckinV2f() {
+	wg := sync.WaitGroup{}
+
+	for _, account := range v2freeAccounts {
 		wg.Add(1)
-		go func(id string, pw any) {
-			defer wg.Done()
+		go func(acc Account) {
 
-			v2freeurl := "https://v2free.org/auth/login"
-			method := http.MethodPost
+			acc.Req.Payload = strings.NewReader(fmt.Sprintf("email=%s&passwd=%s&code=", url.QueryEscape(acc.ID), url.QueryEscape(acc.Password)))
 
-			payload := strings.NewReader(fmt.Sprintf("email=%s&passwd=%s&code=", url.QueryEscape(id), url.QueryEscape(pw.(string))))
-			headers := map[string]string{
-				"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-				"referer":      "https://v2free.org/auth/login",
-			}
-
-			req, err := sendHTTPRequest(v2freeurl, method, headers, payload)
+			res, err := acc.Req.SendRequest()
 			if err != nil {
-				fmt.Println(err)
+				push[acc.ID] = err.Error()
 				return
 			}
 
-			defer func(Body io.ReadCloser) {
-				err := Body.Close()
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-			}(req.Body)
+			acc.Req.URL = v2freeCheckUrl
+			acc.Req.Payload = strings.NewReader("")
+			acc.Req.Headers["referer"] = "https://v2free.org/user"
+			cookies := res.Header["Set-Cookie"]
+			acc.Cookie = acc.getCookie(cookies)
 
-			resBody, err := io.ReadAll(req.Body)
+			_, body, err := acc.Req.GetAccountResponseFunc(&acc)
+
 			if err != nil {
-				fmt.Println(err)
+				push[acc.ID] = err.Error()
 				return
 			}
-
-			if req.StatusCode >= 400 {
-				fmt.Printf("Request failed with status code: %v. Response body: %v\n", req.StatusCode, string(resBody))
-				return
-			}
-
-			v2freeurl = "https://v2free.org/user/checkin"
-			payload = strings.NewReader("")
-			headers["referer"] = "https://v2free.org/user"
-			cookies := req.Header["Set-Cookie"]
-
-			var sb strings.Builder
-			for _, v := range cookies {
-				parts := strings.Split(v, ";")
-				uid := strings.TrimSpace(parts[0])
-				sb.WriteString(uid)
-				sb.WriteString("; ")
-			}
-
-			str := sb.String()
-			str = strings.TrimRight(str, "; ")
-
-			headers["cookie"] = str
-
-			res, err := getResponseBody(v2freeurl, method, headers, payload)
 
 			result := Result{}
-			err = json.Unmarshal(res, &result)
+			err = json.Unmarshal(body, &result)
 			if err != nil {
-				fmt.Println(err)
+				push[acc.ID] = err.Error()
 				return
 			}
-
-			push[id] = result.Msg
-			fmt.Println(id, ": ", result.Msg)
-		}(id, pw)
+			fmt.Println(acc.ID, ":", result.Msg)
+			push[acc.ID] = result.Msg
+			wg.Done()
+		}(account)
 	}
 	wg.Wait()
+}
 
-	getResponseBody(fmt.Sprintf("http://www.pushplus.plus/send?token=%s&content=%s&title=GlaDOS%s", pushToken, url.QueryEscape(MapToJson(push)), url.QueryEscape("GlaDOS签到")), http.MethodGet, nil, strings.NewReader(""))
+func TestRun(t *testing.T) {
+	push := pushMap{}
+	push.CheckinGla()
+	push.CheckinV2f()
+
+	req := Request{
+		URL:     fmt.Sprintf("http://www.pushplus.plus/send?token=%s&content=%s&title=GlaDOS%s", pushToken, url.QueryEscape(MapToJson(push)), url.QueryEscape("GlaDOS签到")),
+		Method:  http.MethodGet,
+		Payload: nil,
+		Headers: nil,
+	}
+
+	_, _ = req.SendRequest()
 }
