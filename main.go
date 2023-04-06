@@ -95,7 +95,7 @@ func MapToJson(param map[string]string) string {
 	return dataString
 }
 
-func (req *Request) SendRequest() (*http.Response, error) {
+func (req *Request) sendRequest() (*http.Response, error) {
 	client := &http.Client{}
 
 	httpReq, err := http.NewRequest(req.Method, req.URL, req.Payload)
@@ -108,6 +108,40 @@ func (req *Request) SendRequest() (*http.Response, error) {
 	}
 
 	res, err := client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
+func (req *Request) SendRequest() (*http.Response, error) {
+	var res *http.Response
+	var err error
+
+	// 设置请求超时时间为 5 秒钟
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 使用 for 循环进行超时重试
+	for i := 0; i < 3; i++ {
+		// 发送请求
+		res, err = req.sendRequest()
+		if err == nil {
+			break
+		}
+
+		// 如果请求失败，则等待一段时间后再次尝试
+		fmt.Printf("Request failed on attempt %d: %v\n", i+1, err)
+		select {
+		case <-ctx.Done():
+			// 超时或主动取消
+			return nil, fmt.Errorf("Request timed out: %v", ctx.Err())
+		case <-time.After(2 * time.Second):
+			// 等待 2 秒钟后再次尝试
+		}
+	}
+
 	if err != nil {
 		return nil, err
 	}
