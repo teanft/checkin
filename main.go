@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"testing"
 )
 
 const (
@@ -213,7 +212,7 @@ func (push pushMap) CheckinV2f() {
 	wg.Wait()
 }
 
-func TestRun(t *testing.T) {
+func main() {
 	push := pushMap{}
 	push.CheckinGla()
 	push.CheckinV2f()
