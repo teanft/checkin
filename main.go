@@ -12,7 +12,7 @@ import (
 
 const (
 	gladosUrl      = "https://glados.rocks/api/user/checkin"
-	pushToken      = "xxx_push_token"
+	pushToken      = "xxx_push_token" // 前往 https://www.pushplus.plus/ 获取Token
 	v2freeLoginUrl = "https://v2free.org/auth/login"
 	v2freeCheckUrl = "https://v2free.org/user/checkin"
 )
