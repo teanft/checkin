@@ -210,7 +210,6 @@ func (push pushMap) CheckinV2f() {
 	for _, account := range v2freeAccounts {
 		wg.Add(1)
 		go func(acc Account) {
-
 			acc.Req.Payload = strings.NewReader(fmt.Sprintf("email=%s&passwd=%s&code=", url.QueryEscape(acc.ID), url.QueryEscape(acc.Password)))
 
 			res, err := acc.Req.SendRequest()
